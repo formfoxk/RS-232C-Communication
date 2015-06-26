@@ -56,12 +56,31 @@ CEmulatorMFCDlg::CEmulatorMFCDlg(CWnd* pParent /*=NULL*/)
 void CEmulatorMFCDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialogEx::DoDataExchange(pDX);
+	DDX_Control(pDX, IDC_LOGO, m_logo);
+	DDX_Control(pDX, IDC_COMBO, m_comboBox);
+	DDX_Control(pDX, IDC_PICTURE, m_picture);
+	DDX_Control(pDX, IDC_ONOFF, m_onoff);
+	DDX_Control(pDX, IDC_TIME, m_time);
+	DDX_Control(pDX, IDC_PROGRESS, m_progress);
+	DDX_Control(pDX, IDC_STATELIST, m_stateList);
 }
 
 BEGIN_MESSAGE_MAP(CEmulatorMFCDlg, CDialogEx)
 	ON_WM_SYSCOMMAND()
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
+	ON_MESSAGE(WM_MYRECEIVE, OnReceive)
+	ON_MESSAGE(WM_MYCLOSE, OnThreadClosed)
+	ON_BN_CLICKED(IDC_BUTTON8, &CEmulatorMFCDlg::OnBnClickedButton8)
+	ON_BN_CLICKED(IDC_BUTTON7, &CEmulatorMFCDlg::OnBnClickedButton7)
+	ON_BN_CLICKED(IDC_BUTTON6, &CEmulatorMFCDlg::OnBnClickedButton6)
+	ON_BN_CLICKED(IDC_BUTTON5, &CEmulatorMFCDlg::OnBnClickedButton5)
+	ON_BN_CLICKED(IDC_BUTTON4, &CEmulatorMFCDlg::OnBnClickedButton4)
+	ON_BN_CLICKED(IDC_BUTTON3, &CEmulatorMFCDlg::OnBnClickedButton3)
+	ON_BN_CLICKED(IDC_BUTTON2, &CEmulatorMFCDlg::OnBnClickedButton2)
+	ON_BN_CLICKED(IDC_BUTTON1, &CEmulatorMFCDlg::OnBnClickedButton1)
+	ON_BN_CLICKED(IDC_CONN, &CEmulatorMFCDlg::OnBnClickedConn)
+	ON_BN_CLICKED(IDC_DISCONN, &CEmulatorMFCDlg::OnBnClickedDisconn)
 END_MESSAGE_MAP()
 
 
@@ -150,3 +169,178 @@ HCURSOR CEmulatorMFCDlg::OnQueryDragIcon()
 	return static_cast<HCURSOR>(m_hIcon);
 }
 
+LRESULT CEmulatorMFCDlg::OnThreadClosed(WPARAM length, LPARAM lpara)
+{
+	//AfxMessageBox(_T("내용"));
+
+	//overlapped i/o 핸들을 닫는다.
+	((Comm*)lpara)->HandleClose();
+	delete ((Comm*)lpara);
+
+	return 0;
+}
+
+LPSTR CEmulatorMFCDlg::UnicodeToAscii(LPWSTR lpData,LPSTR lpReturndata)
+{
+	WideCharToMultiByte(CP_ACP, 0, lpData, wcslen(lpData), lpReturndata, wcslen(lpData)*2, NULL, NULL);
+	
+	return lpReturndata;
+}
+
+LPWSTR CEmulatorMFCDlg::AsciiToUnicode(LPCSTR lpData,LPWSTR lpwszReturn)
+{
+	MultiByteToWideChar(CP_ACP, 0, lpData, -1, lpwszReturn, strlen(lpData)*2);
+	
+	return lpwszReturn;
+}
+
+//메시지 수신 처리
+// 3초이상 시간이 지나도 오지 않으면,
+
+LRESULT CEmulatorMFCDlg::OnReceive(WPARAM length, LPARAM lpara)
+{  // Target으로부터 메시지를 받는 함수
+	CString temp;
+	receive_str.Format(_T(""));
+	temp.Format(_T(""));
+
+	char data[2000];
+	
+	if(con)
+	{
+		
+		con->Receive(data,length);
+
+		for(int i = 0;i<(int)length;i++)
+		{
+			receive_str += data[i];
+
+			if(data[i]==0x03)  // 전송이 끝나면
+			{
+				parsingMsg();
+				cmdProcess();
+				receive_str="";		
+			}
+		}
+	}
+	return 0;
+}
+
+void CEmulatorMFCDlg::parsingMsg()
+{
+	m_PACKET.stx = receive_str[0];
+	m_PACKET.src = receive_str[1];
+	m_PACKET.des = receive_str[2];
+	m_PACKET.cmd[0] = receive_str[3];
+	m_PACKET.cmd[1] = receive_str[4];
+	m_PACKET.size[0] = receive_str[5] ;
+	m_PACKET.size[1] = receive_str[6];
+	m_PACKET.checkSum = receive_str[49];
+	m_PACKET.etx = receive_str[50];
+
+	for(int i = 7, j = 0; i < 49; i++, j++)
+		m_PACKET.data[j] = receive_str[i];
+
+
+	CString packet,packetData,packetTail;
+	packet.Format(_T("0x0%x %c %c %c%c %c%c "), m_PACKET.stx, m_PACKET.src, m_PACKET.des, m_PACKET.cmd[0],m_PACKET.cmd[1],m_PACKET.size[0],m_PACKET.size[1]);
+
+	CString temp;
+	for(int i=0; i<2; i++){    // Data size CString타입으로 변환
+		temp += m_PACKET.size[i];
+	}
+
+	int len = _ttoi(temp);     // 다시 CString타입을 int형으로 변환하여 길이를 구함
+	for(int i=0; i<len;i++)
+	{
+		packetData += receive_str[7+i];  // 길이만큼 데이터를 out2에 넣음
+	}
+
+	packetTail.Format(_T(" 0x0%x 0x0%x"),m_PACKET.checkSum,m_PACKET.etx);
+
+	packet += packetData; //명령어 길이 추가
+	packet += packetTail; // CheckSum,ETX 추가
+	m_stateList.AddString(packet);
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton8()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton7()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton6()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton5()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton4()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton3()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton2()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedButton1()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedConn()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+
+void CEmulatorMFCDlg::OnBnClickedDisconn()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+}
+
+// Member Function
+void CEmulatorMFCDlg::onOffControl(boolean flag){
+
+}
+void CEmulatorMFCDlg::connectionCheck(){
+
+}
+void CEmulatorMFCDlg::adcCheck(){
+
+}					
+void CEmulatorMFCDlg::ledStateSend(){
+
+}				
+void CEmulatorMFCDlg::ledStateRequest(){
+
+}				
+void CEmulatorMFCDlg::adcConvertLed(){
+
+}
+void CEmulatorMFCDlg::cmdProcess(){
+
+}

@@ -33,6 +33,9 @@
     <ClInclude Include="Resource.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\치민이형\GUI\Comm.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Emulator-MFC.cpp">
@@ -42,6 +45,9 @@
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="stdafx.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\치민이형\GUI\Comm.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
