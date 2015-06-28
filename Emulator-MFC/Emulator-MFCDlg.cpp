@@ -11,6 +11,14 @@
 #define new DEBUG_NEW
 #endif
 
+char* serialization(struct Packet* pk)
+{
+   return (char*)pk;
+}
+struct Packet* unserialization(char* buff)
+{
+   return (struct Packet*)buff;
+}
 
 // 응용 프로그램 정보에 사용되는 CAboutDlg 대화 상자입니다.
 
@@ -58,11 +66,14 @@ void CEmulatorMFCDlg::DoDataExchange(CDataExchange* pDX)
 	CDialogEx::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_LOGO, m_logo);
 	DDX_Control(pDX, IDC_COMBO, m_comboBox);
-	DDX_Control(pDX, IDC_PICTURE, m_picture);
-	DDX_Control(pDX, IDC_ONOFF, m_onoff);
 	DDX_Control(pDX, IDC_TIME, m_time);
 	DDX_Control(pDX, IDC_PROGRESS, m_progress);
 	DDX_Control(pDX, IDC_STATELIST, m_stateList);
+	DDX_Control(pDX, IDC_PICTURE, m_picture);
+	DDX_Control(pDX, IDC_CONN, m_conn);
+	DDX_Control(pDX, IDC_DISCONN, m_disConn);
+	DDX_Control(pDX, IDC_OFF, m_off);
+	DDX_Control(pDX, IDC_ON, m_on);
 }
 
 BEGIN_MESSAGE_MAP(CEmulatorMFCDlg, CDialogEx)
@@ -81,6 +92,9 @@ BEGIN_MESSAGE_MAP(CEmulatorMFCDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON1, &CEmulatorMFCDlg::OnBnClickedButton1)
 	ON_BN_CLICKED(IDC_CONN, &CEmulatorMFCDlg::OnBnClickedConn)
 	ON_BN_CLICKED(IDC_DISCONN, &CEmulatorMFCDlg::OnBnClickedDisconn)
+	ON_WM_CTLCOLOR()
+	ON_WM_TIMER()
+	ON_WM_DRAWITEM()
 END_MESSAGE_MAP()
 
 
@@ -116,6 +130,20 @@ BOOL CEmulatorMFCDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// 작은 아이콘을 설정합니다.
 
 	// TODO: 여기에 추가 초기화 작업을 추가합니다.
+	checkSec = 3;
+	
+	// ● 크기 조정
+	fontOn.CreatePointFont(150,_T("돋움"));                    
+	GetDlgItem(IDC_ON)->SetFont(&fontOn);
+
+	fontOff.CreatePointFont(150,_T("돋움"));                    
+	GetDlgItem(IDC_OFF)->SetFont(&fontOff);
+
+	onOffControl(false);
+
+	for(int i = 0; i < 8; i++)
+		ledState[i] = false;
+
 
 	return TRUE;  // 포커스를 컨트롤에 설정하지 않으면 TRUE를 반환합니다.
 }
@@ -157,7 +185,12 @@ void CEmulatorMFCDlg::OnPaint()
 		dc.DrawIcon(x, y, m_hIcon);
 	}
 	else
-	{
+	{		
+		//사진 등록
+		/*CBitmap bitmap;
+		bitmap.LoadBitmap(IDB_BITMAP1);
+		m_picture.SetBitmap((HBITMAP)bitmap.GetSafeHandle());*/
+
 		CDialogEx::OnPaint();
 	}
 }
@@ -199,148 +232,388 @@ LPWSTR CEmulatorMFCDlg::AsciiToUnicode(LPCSTR lpData,LPWSTR lpwszReturn)
 
 LRESULT CEmulatorMFCDlg::OnReceive(WPARAM length, LPARAM lpara)
 {  // Target으로부터 메시지를 받는 함수
-	CString temp;
-	receive_str.Format(_T(""));
-	temp.Format(_T(""));
-
-	char data[2000];
-	
 	if(con)
 	{
-		
-		con->Receive(data,length);
+		Packet *p;
+		char str[100];
 
-		for(int i = 0;i<(int)length;i++)
+		if (length < sizeof(Packet))
 		{
-			receive_str += data[i];
-
-			if(data[i]==0x03)  // 전송이 끝나면
-			{
-				parsingMsg();
-				cmdProcess();
-				receive_str="";		
+			int count = 0;
+			for (UINT i = 0; i < sizeof(Packet); i++) {
+				con->Receive(&(str[i]), 1);
 			}
+			p = unserialization(str);
+
+			cmdProcess(*p);
+			// reset packet
+			memset(p, 0, sizeof(Packet));
 		}
 	}
 	return 0;
 }
 
-void CEmulatorMFCDlg::parsingMsg()
-{
-	m_PACKET.stx = receive_str[0];
-	m_PACKET.src = receive_str[1];
-	m_PACKET.des = receive_str[2];
-	m_PACKET.cmd[0] = receive_str[3];
-	m_PACKET.cmd[1] = receive_str[4];
-	m_PACKET.size[0] = receive_str[5] ;
-	m_PACKET.size[1] = receive_str[6];
-	m_PACKET.checkSum = receive_str[49];
-	m_PACKET.etx = receive_str[50];
+void CEmulatorMFCDlg::cmdProcess(Packet p){
+	if(p.mCmd < END_PROTOCOL && p.mCmd > START_PROTOCOL){
+		CString alarm;
+		alarm = "";
 
-	for(int i = 7, j = 0; i < 49; i++, j++)
-		m_PACKET.data[j] = receive_str[i];
+		switch (p.mCmd)
+		{
+		case ACK:
+			alarm.Format(_T("Check receive ACK and send ACK"));
+			sendAck();	// ACK가 오면 ACK를 다시 보낸다.
+			break;
+		case SEND_LED:
+			alarm.Format(_T("Receive LED Info"));
+			receiveLED(p);
+			break;
 
+		case VOLTAGE:
+			alarm.Format(_T("Receive VOLTAGE Info"));
+			receiveVoltage(p);
+			break;
 
-	CString packet,packetData,packetTail;
-	packet.Format(_T("0x0%x %c %c %c%c %c%c "), m_PACKET.stx, m_PACKET.src, m_PACKET.des, m_PACKET.cmd[0],m_PACKET.cmd[1],m_PACKET.size[0],m_PACKET.size[1]);
+		case TIME:
+			alarm.Format(_T("Receive TIME Info"));
+			receiveTime(p);
+			break;
 
-	CString temp;
-	for(int i=0; i<2; i++){    // Data size CString타입으로 변환
-		temp += m_PACKET.size[i];
+		default:
+			alarm.Format(_T("ERROR"));
+			break;
+		}
+		m_stateList.AddString(alarm);
 	}
+}
+void CEmulatorMFCDlg::sendAck(){
+	Packet p;
 
-	int len = _ttoi(temp);     // 다시 CString타입을 int형으로 변환하여 길이를 구함
-	for(int i=0; i<len;i++)
-	{
-		packetData += receive_str[7+i];  // 길이만큼 데이터를 out2에 넣음
+	p.mStx = 0x02;
+	p.mSrc = 0;
+	p.mDes = 0;
+	p.mCmd = RACK;
+	p.mSize = 0;
+	p.mChk = 0x04;
+	p.mEtx = 0x03;
+
+	con->Send((LPCTSTR)serialization(&p), sizeof(p));
+};			
+void CEmulatorMFCDlg::receiveLED(Packet p){
+	int size = p.mSize;
+	if (size > 10) return;
+	for(int i = 0; i < size; i++){
+		if(p.mData[i] == '0')
+			ledState[i] = false;
+		else if(p.mData[i] == '1')
+			ledState[i] = true;
+		/*else
+			AfxMessageBox(_T("ERROR : receiveLED(Packet p)"));*/
 	}
+	Invalidate(false); // 화면 재구성
+}
+void CEmulatorMFCDlg::receiveVoltage(Packet p){
+	CString vol;
+	vol = "";
 
-	packetTail.Format(_T(" 0x0%x 0x0%x"),m_PACKET.checkSum,m_PACKET.etx);
+	int size = p.mSize;
+	if (size > 2) return;
+	for(int i = 0; i < size;i++)
+		vol += p.mData[i];
+	/*
+	CString s;
+	s.Format(_T("%s"), vol);
+	AfxMessageBox(s);*/
 
-	packet += packetData; //명령어 길이 추가
-	packet += packetTail; // CheckSum,ETX 추가
-	m_stateList.AddString(packet);
+	int pos;
+	pos = _ttoi(vol);
+
+	if (pos > 0 && pos < 100) {
+		m_progress.SetPos(pos);
+	}
+}
+void CEmulatorMFCDlg::receiveTime(Packet p){
+	CString time;
+
+	time.Format(_T("%c%c:%c%c:%c%c"), p.mData[0], p.mData[1], p.mData[2], p.mData[3], p.mData[4], p.mData[5]);
+	m_time.SetWindowTextW(time);
+
+	Invalidate();
 }
 
+
+
+HBRUSH CEmulatorMFCDlg::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
+{
+	HBRUSH hbr = CDialogEx::OnCtlColor(pDC, pWnd, nCtlColor);
+
+	// TODO:  여기서 DC의 특성을 변경합니다.
+	CRect rect;
+	UINT nID = pWnd->GetDlgCtrlID();
+
+	if(nCtlColor == CTLCOLOR_STATIC)
+	{    
+        if(nID == IDC_LOGO)
+        {
+               pDC->SetBkMode(TRANSPARENT);      // 배경투명
+               pDC->SetTextColor(RGB(0, 0, 250));  // 글자 색
+               pDC->SetBkColor(RGB(0, 30, 0));  // 배경 색
+               return (HBRUSH)::GetStockObject(NULL_BRUSH);
+        }
+		else if(nID == IDC_ON)
+		{
+			   pDC->SetBkMode(TRANSPARENT);      // 배경투명
+               pDC->SetTextColor(RGB(000, 000, 204));  // 글자 색
+               pDC->SetBkColor(RGB(0, 000, 204));  // 배경 색
+               return (HBRUSH)::GetStockObject(NULL_BRUSH);
+		}
+		else if(nID == IDC_OFF)
+		{
+			   pDC->SetBkMode(TRANSPARENT);      // 배경투명
+               pDC->SetTextColor(RGB(255, 0, 0));  // 글자 색
+               pDC->SetBkColor(RGB(255, 0, 0));  // 배경 색
+               return (HBRUSH)::GetStockObject(NULL_BRUSH);
+		}
+	}
+	// TODO:  기본값이 적당하지 않으면 다른 브러시를 반환합니다.
+	return hbr;
+}
+
+
+void CEmulatorMFCDlg::OnTimer(UINT_PTR nIDEvent)
+{
+	// TODO: 여기에 메시지 처리기 코드를 추가 및/또는 기본값을 호출합니다.
+	if(nIDEvent==1)
+	{
+		checkSec--;
+		if(checkSec <= 0){
+			sendAck();
+			checkSec = 3;
+
+			KillTimer(1);
+		}
+	}
+
+	CDialogEx::OnTimer(nIDEvent);
+}
+
+void CEmulatorMFCDlg::OnBnClickedConn()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	
+	CString port;
+	m_comboBox.GetLBText(m_comboBox.GetCurSel(), port);
+
+	if(port.GetLength() == 5)
+		port = _T("\\\\.\\") + port;
+
+	con = new Comm(port, _T("9600"), _T("None"), _T("8 Bit"), _T("1 Bit"));
+
+	//포트와 연결 성공시
+	if(con->Create(this->m_hWnd)==TRUE)
+	{
+		m_stateList.AddString(_T("Sucess Port Connection"));
+		m_stateList.SetCurSel(m_stateList.GetCount()-1);
+		m_conn.EnableWindow(false);
+		m_disConn.EnableWindow(true);
+		
+		sendAck(); //Connection 성공 알림 패킷 전송
+
+		onOffControl(true);
+	}
+	else
+	{
+		m_stateList.AddString(_T("Fail Port Connection"));
+		m_stateList.SetCurSel(m_stateList.GetCount()-1);
+
+		onOffControl(false);
+	}
+}
+
+void CEmulatorMFCDlg::OnBnClickedDisconn()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	CString temp;
+
+	con->HandleClose();
+	con->Close();
+
+	m_conn.EnableWindow(true);
+	m_disConn.EnableWindow(false);
+
+	onOffControl(false);
+	m_stateList.AddString(_T("Disconnect Port"));
+	m_stateList.SetCurSel(m_stateList.GetCount()-1);
+
+
+	KillTimer(1);
+}
 
 void CEmulatorMFCDlg::OnBnClickedButton8()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[7] = !ledState[7];
+
+	sendLedState(7);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton7()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[6] = !ledState[6];
+
+	sendLedState(6);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton6()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[5] = !ledState[5];
+
+	sendLedState(5);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton5()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[4] = !ledState[4];
+
+	sendLedState(4);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton4()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[3] = !ledState[3];
+
+	sendLedState(3);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton3()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[2] = !ledState[2];
+
+	sendLedState(2);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton2()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[1] = !ledState[1];
+
+	sendLedState(1);
 }
 
 
 void CEmulatorMFCDlg::OnBnClickedButton1()
 {
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	ledState[0] = !ledState[0];
+
+	sendLedState(0);
 }
 
 
-void CEmulatorMFCDlg::OnBnClickedConn()
+void CEmulatorMFCDlg::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 {
-	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	// TODO: 여기에 메시지 처리기 코드를 추가 및/또는 기본값을 호출합니다.
+	if(nIDCtl == IDC_BUTTON1)
+		drawButton(0, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON2)
+		drawButton(1, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON3)
+		drawButton(2, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON4)
+		drawButton(3, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON5)
+		drawButton(4, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON6)
+		drawButton(5, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON7)
+		drawButton(6, lpDrawItemStruct);
+	else if(nIDCtl == IDC_BUTTON8)
+		drawButton(7, lpDrawItemStruct);
+}
+void CEmulatorMFCDlg::sendLedState(int clickedIndex){
+	Packet p;
+
+	p.mStx = 0x02;
+	p.mSrc = 0;
+	p.mDes = 0;
+	p.mCmd = CHANGE_LED;
+	p.mSize = 9;
+	for(int i = 0; i < 8; i++)
+		p.mData[i] = '0';
+	p.mData[clickedIndex] = '1';
+	p.mChk = 0x04;
+	p.mEtx = 0x03;
+
+	for (int i = 0; i < sizeof(p); i++)
+		con->Send((LPCTSTR)(serialization(&p) + i), 1);
+
+	Invalidate();
 }
 
+void CEmulatorMFCDlg::drawButton(int btnNumber, LPDRAWITEMSTRUCT lpDrawItemStruct){
+	CDC dc;
+	RECT rect;
+	dc.Attach(lpDrawItemStruct->hDC);						//버튼의 dc구하기
+	rect = lpDrawItemStruct->rcItem	;						//버튼영역 구하기
 
-void CEmulatorMFCDlg::OnBnClickedDisconn()
-{
-	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	// LED가 켜진 경우
+	if(ledState[btnNumber]){
+		dc.Draw3dRect(&rect, RGB(255,102,102), RGB(255,102,102));	//버튼의 외각선 그리기
+		dc.FillSolidRect(&rect, RGB(255,102,102));					//버튼색상
+	}
+	else
+	{
+		dc.Draw3dRect(&rect, RGB(255,255,255), RGB(255,255,255));	//버튼의 외각선 그리기
+		dc.FillSolidRect(&rect, RGB(255,255,255));					//버튼색상
+	}
+
+
+
+	//Show the Effect of Click Event
+	UINT state = lpDrawItemStruct->itemState;				//버튼상태구하기
+	if((state & ODS_SELECTED))
+	{
+		dc.DrawEdge(&rect, EDGE_SUNKEN, BF_RECT);
+	}
+	else
+	{
+		dc.DrawEdge(&rect, EDGE_RAISED, BF_RECT);
+	}
+
+	//Draw Color Text
+	dc.SetBkColor(RGB(255,102,102));						//Setting the Text Background Color
+	dc.SetTextColor(RGB(255,255,255));						//Setting the Text Color
+
+	TCHAR buffer[MAX_PATH];					
+	ZeroMemory(buffer, MAX_PATH);									//버퍼초기화
+	::GetWindowText(lpDrawItemStruct->hwndItem, buffer, MAX_PATH);	//버튼의 text얻기
+
+	dc.DrawText(buffer, &rect, DT_CENTER|DT_VCENTER |DT_SINGLELINE);//버튼의 text넣기
+	dc.Detach();													//버튼의 dc 풀어주기
+
 }
 
 // Member Function
 void CEmulatorMFCDlg::onOffControl(boolean flag){
-
+	// On인 경우
+	if(flag){
+		GetDlgItem(IDC_ON)->ShowWindow(TRUE);
+		GetDlgItem(IDC_OFF)->ShowWindow(FALSE);	
+	}else{
+		GetDlgItem(IDC_ON)->ShowWindow(FALSE);	
+		GetDlgItem(IDC_OFF)->ShowWindow(TRUE);
+	}
 }
-void CEmulatorMFCDlg::connectionCheck(){
 
-}
-void CEmulatorMFCDlg::adcCheck(){
 
-}					
-void CEmulatorMFCDlg::ledStateSend(){
-
-}				
-void CEmulatorMFCDlg::ledStateRequest(){
-
-}				
-void CEmulatorMFCDlg::adcConvertLed(){
-
-}
-void CEmulatorMFCDlg::cmdProcess(){
-
-}
